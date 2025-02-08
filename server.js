@@ -1,5 +1,3 @@
-// server.js
-
 require('dotenv').config(); // Memuat variabel lingkungan dari .env
 const express = require("express");
 const mysql = require("mysql2");
@@ -12,10 +10,13 @@ const rateLimit = require("express-rate-limit");
 const MySQLStore = require("express-mysql-session")(session);
 const { body, validationResult } = require("express-validator");
 
+// Tambahan modul untuk file upload
+const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
+
 const app = express();
-app.get("/", (req, res) => {
-  res.send("Selamat datang di API Worthbuyam");
-});
+
 // Gunakan Helmet untuk mengamankan header HTTP
 app.use(helmet());
 
@@ -96,6 +97,10 @@ function handleQueryError(err, res, defaultMessage) {
 // ----------------------
 // Endpoint API
 // ----------------------
+
+app.get("/", (req, res) => {
+  res.send("Selamat datang di API Worthbuyam Ver art");
+});
 
 // API LOGIN: Autentikasi pengguna dan simpan data sesi
 app.post(
@@ -272,16 +277,117 @@ app.post(
     });
   }
 );
-// Endpoint /auth: Mengecek status login pengguna
-app.get("/auth", (req, res) => {
-  if (req.session && req.session.user) {
-    return res.status(200).json({
-      isAuthenticated: true,
-      user: req.session.user, // kirim data user jika diperlukan
-    });
-  }
-  return res.status(200).json({ isAuthenticated: false });
+
+// ----------------------
+// CRUD Endpoint untuk Art
+// ----------------------
+
+// Pastikan folder uploads/Art ada
+const uploadDir = path.join(__dirname, "uploads/Art");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Konfigurasi multer untuk upload file
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname));
+  },
 });
+const upload = multer({ storage: storage });
+
+// CREATE (Tambah data Art)
+// Endpoint: POST /art
+// Field image dikirim dengan key "image"
+app.post("/art", upload.single("image"), (req, res) => {
+  const { title, description } = req.body;
+  const imageUrl = req.file ? `/uploads/Art/${req.file.filename}` : null;
+
+  pool.query(
+    "INSERT INTO Art (title, description, image_url) VALUES (?, ?, ?)",
+    [title, description, imageUrl],
+    (err, result) => {
+      if (err) return res.status(500).json({ success: false, message: err.message });
+      res.json({ success: true, message: "Data Art berhasil ditambahkan", id: result.insertId });
+    }
+  );
+});
+
+// READ (Ambil semua data Art)
+// Endpoint: GET /art
+app.get("/art", (req, res) => {
+  pool.query("SELECT * FROM Art", (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: err.message });
+    res.json({ success: true, data: results });
+  });
+});
+
+// READ by ID (Ambil satu data Art berdasarkan ID)
+// Endpoint: GET /art/:id
+app.get("/art/:id", (req, res) => {
+  const { id } = req.params;
+  pool.query("SELECT * FROM Art WHERE id = ?", [id], (err, result) => {
+    if (err) return res.status(500).json({ success: false, message: err.message });
+    if (result.length === 0) return res.status(404).json({ success: false, message: "Data tidak ditemukan" });
+    res.json({ success: true, data: result[0] });
+  });
+});
+
+// UPDATE (Edit data Art)
+// Endpoint: PUT /art/:id
+// Jika ada file baru, akan menggantikan image_url sebelumnya.
+app.put("/art/:id", upload.single("image"), (req, res) => {
+  const { id } = req.params;
+  const { title, description } = req.body;
+  const imageUrl = req.file ? `/uploads/Art/${req.file.filename}` : null;
+
+  let query = "UPDATE Art SET title = ?, description = ?";
+  let params = [title, description];
+
+  if (imageUrl) {
+    query += ", image_url = ?";
+    params.push(imageUrl);
+  }
+
+  query += " WHERE id = ?";
+  params.push(id);
+
+  pool.query(query, params, (err, result) => {
+    if (err) return res.status(500).json({ success: false, message: err.message });
+    res.json({ success: true, message: "Data Art berhasil diperbarui" });
+  });
+});
+
+// DELETE (Hapus data Art)
+// Endpoint: DELETE /art/:id
+// Juga menghapus file gambar yang tersimpan (jika ada)
+app.delete("/art/:id", (req, res) => {
+  const { id } = req.params;
+
+  // Ambil nama file dulu untuk menghapus dari folder
+  pool.query("SELECT image_url FROM Art WHERE id = ?", [id], (err, result) => {
+    if (err) return res.status(500).json({ success: false, message: err.message });
+    if (result.length === 0) return res.status(404).json({ success: false, message: "Data tidak ditemukan" });
+
+    const imageUrl = result[0].image_url;
+    if (imageUrl) {
+      const filePath = path.join(__dirname, imageUrl);
+      fs.unlink(filePath, (err) => {
+        if (err && err.code !== "ENOENT") console.error("Gagal menghapus file:", err);
+      });
+    }
+
+    // Hapus data dari database
+    pool.query("DELETE FROM Art WHERE id = ?", [id], (err, result) => {
+      if (err) return res.status(500).json({ success: false, message: err.message });
+      res.json({ success: true, message: "Data Art berhasil dihapus" });
+    });
+  });
+});
+
 // ----------------------
 // Menjalankan Server
 // ----------------------
