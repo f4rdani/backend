@@ -13,7 +13,9 @@ const MySQLStore = require("express-mysql-session")(session);
 const { body, validationResult } = require("express-validator");
 
 const app = express();
-
+app.get("/", (req, res) => {
+  res.send("Selamat datang di API Worthbuyam");
+});
 // Gunakan Helmet untuk mengamankan header HTTP
 app.use(helmet());
 
